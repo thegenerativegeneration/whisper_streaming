@@ -69,7 +69,7 @@ class WhisperTimestampedASR(ASRBase):
                 audio, language=self.original_language,
                 initial_prompt=init_prompt, verbose=None,
                 condition_on_previous_text=True, **self.transcribe_kargs)
-        return result
+        return result, {}
  
     def ts_words(self,r):
         # return: transcribe result object to [(beg,end,"word1"), ...]
@@ -127,7 +127,7 @@ class FasterWhisperASR(ASRBase):
         segments, info = self.model.transcribe(audio, language=self.original_language, initial_prompt=init_prompt, beam_size=5, word_timestamps=True, condition_on_previous_text=True, **self.transcribe_kargs)
         #print(info)  # info contains language detection result
 
-        return list(segments)
+        return list(segments), info
 
     def ts_words(self, segments):
         o = []
@@ -226,7 +226,7 @@ class OpenaiApiASR(ASRBase):
         transcript = proc.create(**params)
         print(f"OpenAI API processed accumulated {self.transcribed_seconds} seconds",file=self.logfile)
 
-        return transcript
+        return transcript, {}
 
     def use_vad(self):
         self.use_vad_opt = True
@@ -361,7 +361,7 @@ class OnlineASRProcessor:
         print("PROMPT:", prompt, file=self.logfile)
         print("CONTEXT:", non_prompt, file=self.logfile)
         print(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}",file=self.logfile)
-        res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
+        res, info = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
 
         # transform to [(beg,end,"word1"), ...]
         tsw = self.asr.ts_words(res)
@@ -398,7 +398,7 @@ class OnlineASRProcessor:
             #self.chunk_at(t)
 
         print(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}",file=self.logfile)
-        return self.to_flush(o)
+        return self.to_flush(o), info
 
     def chunk_completed_sentence(self):
         if self.commited == []: return
