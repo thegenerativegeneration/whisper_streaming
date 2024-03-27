@@ -8,6 +8,7 @@ import io
 import soundfile as sf
 import math
 
+
 @lru_cache
 def load_audio(fname):
     a, _ = librosa.load(fname, sr=16000, dtype=np.float32)
@@ -89,7 +90,81 @@ class WhisperTimestampedASR(ASRBase):
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
 
+class TransformersWhisperASR(ASRBase):
+    """Uses Huggingface's Transformers library as the backend.
+    """
 
+    sep = ""
+
+    def load_model(self, model_id=None, cache_dir=None, model_dir=None):
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+        import torch
+        self.set_device()
+    
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_id, torch_dtype=torch.float16, low_cpu_mem_usage=True, use_safetensors=True)
+        model.to(self.device)
+
+        self.processor = AutoProcessor.from_pretrained(model_id)
+        self._create_pipeline(model)
+
+        return model
+    
+    def _create_pipeline(self, model, no_speech_threshold=None):
+        from transformers import pipeline
+        import torch
+        self.pipeline = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            torch_dtype=torch.float16,
+            chunk_length_s=30,
+            max_new_tokens=128,
+            batch_size=24,
+            return_timestamps="word",
+            device=self.device,
+            tokenizer=self.processor.tokenizer,
+            feature_extractor=self.processor.feature_extractor,
+            model_kwargs={"use_flash_attention_2": True},
+            generate_kwargs={ "num_beams": 1, # does not work with > 1 (error in transformers library)
+                             "no_speech_threshold": no_speech_threshold},
+        )
+    
+    def set_device(self):
+        """Sets the device to be used for inference based on availability."""
+        import torch
+        if torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        print(f"Using device: {self.device}",file=self.logfile)
+
+    def transcribe(self, audio, init_prompt=""):
+        """
+        todo: get language from the model
+        todo: use prompt
+        todo: use self.original_language
+        """
+        print("Transc       ribing audio...",file=self.logfile)
+        result = self.pipeline(audio)
+        text, chunks = result["text"], result["chunks"]
+        return chunks, {}
+
+    def ts_words(self, segments):
+        output = []
+        for chunk in segments:
+            timestamp = chunk["timestamp"]
+            output.append((timestamp[0], timestamp[1], chunk["text"]))
+        return output
+
+    def segments_end_ts(self, res):
+        return [res[-1]["timestamp"][1]]
+
+    def use_vad(self):
+        self._create_pipeline(self.model, no_speech_threshold=0.8)
+
+    def set_translate_task(self):
+        pass
 
 
 class FasterWhisperASR(ASRBase):
@@ -110,7 +185,7 @@ class FasterWhisperASR(ASRBase):
 
 
         # this worked fast and reliably on NVIDIA L40
-        model = WhisperModel(model_size_or_path, device="cuda", compute_type="float16", download_root=cache_dir)
+        #model = WhisperModel(model_size_or_path, device="cuda", compute_type="float16", download_root=cache_dir)
 
         # or run on GPU with INT8
         # tested: the transcripts were different, probably worse than with FP16, and it was slightly (appx 20%) slower
@@ -118,7 +193,7 @@ class FasterWhisperASR(ASRBase):
 
         # or run on CPU with INT8
         # tested: works, but slow, appx 10-times than cuda FP16
-#        model = WhisperModel(modelsize, device="cpu", compute_type="int8") #, download_root="faster-disk-cache-dir/")
+        model = WhisperModel(modelsize, device="cpu", compute_type="int8") #, download_root="faster-disk-cache-dir/")
         return model
 
     def transcribe(self, audio, init_prompt=""):
