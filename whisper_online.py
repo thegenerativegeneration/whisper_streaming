@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import sys
+from typing import List, Tuple
+
 import numpy as np
 import librosa  
 from functools import lru_cache
@@ -7,6 +9,9 @@ import time
 import io
 import soundfile as sf
 import math
+
+from faster_whisper.transcribe import Segment, TranscriptionInfo
+
 
 @lru_cache
 def load_audio(fname):
@@ -111,10 +116,11 @@ class FasterWhisperASR(ASRBase):
         model = WhisperModel(model_size_or_path, device="auto", compute_type="auto", download_root=cache_dir)
         return model
 
-    def transcribe(self, audio, init_prompt=""):
+    def transcribe(self, audio, init_prompt="") -> Tuple[List[Segment], TranscriptionInfo]:
 
         # tested: beam_size=5 is faster and better than 1 (on one 200 second document from En ESIC, min chunk 0.01)
-        segments, info = self.model.transcribe(audio, language=self.original_language, initial_prompt=init_prompt, beam_size=5, word_timestamps=True, condition_on_previous_text=True, **self.transcribe_kargs)
+        segments, info = self.model.transcribe(audio, language=self.original_language,
+                                               initial_prompt=init_prompt, beam_size=5, word_timestamps=True, condition_on_previous_text=True, **self.transcribe_kargs)
         #print(info)  # info contains language detection result
 
         return list(segments), info
@@ -341,7 +347,7 @@ class OnlineASRProcessor:
         non_prompt = self.commited[k:]
         return self.asr.sep.join(prompt[::-1]), self.asr.sep.join(t for _,_,t in non_prompt)
 
-    def process_iter(self):
+    def process_iter(self) -> Tuple[Tuple, TranscriptionInfo, Tuple]:
         """Runs on the current audio buffer.
         Returns: a tuple (beg_timestamp, end_timestamp, "text"), or (None, None, ""). 
         The non-emty text is confirmed (committed) partial transcript.
@@ -359,8 +365,10 @@ class OnlineASRProcessor:
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
         o = self.transcript_buffer.flush()
         self.commited.extend(o)
-        print(">>>>COMPLETE NOW:",self.to_flush(o),file=self.logfile,flush=True)
-        print("INCOMPLETE:",self.to_flush(self.transcript_buffer.complete()),file=self.logfile,flush=True)
+        complete = self.to_flush(o)
+        print(">>>>COMPLETE NOW:", complete, file=self.logfile, flush=True)
+        incomplete = self.to_flush(self.transcript_buffer.complete())
+        print(">>>>INCOMPLETE:", incomplete, file=self.logfile, flush=True)
 
         # there is a newly confirmed text
 
@@ -388,7 +396,8 @@ class OnlineASRProcessor:
             #self.chunk_at(t)
 
         print(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}",file=self.logfile)
-        return self.to_flush(o), info
+        complete = self.to_flush(o)
+        return complete, info, incomplete
 
     def chunk_completed_sentence(self):
         if self.commited == []: return
@@ -467,7 +476,7 @@ class OnlineASRProcessor:
 
     def finish(self):
         """Flush the incomplete text when the whole processing ends.
-        Returns: the same format as self.process_iter()
+        Returns: the last incomplete text.
         """
         o = self.transcript_buffer.complete()
         f = self.to_flush(o)
@@ -475,7 +484,7 @@ class OnlineASRProcessor:
         return f
 
 
-    def to_flush(self, sents, sep=None, offset=0, ):
+    def to_flush(self, sents, sep=None, offset=0) -> Tuple[int,int,str]:
         # concatenates the timestamped words or sentences into one sequence that is flushed in one line
         # sents: [(beg1, end1, "sentence1"), ...] or [] if empty
         # return: (beg1,end-of-last-sentence,"concatenation of sentences") or (None, None, "") if empty
