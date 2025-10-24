@@ -113,7 +113,7 @@ class FasterWhisperASR(ASRBase):
         else:
             raise ValueError("modelsize or model_dir parameter must be set")
 
-        model = WhisperModel(model_size_or_path, device="auto", compute_type="auto", download_root=cache_dir)
+        model = WhisperModel(model_size_or_path, device="auto", compute_type="float16", download_root=cache_dir)
         return model
 
     def transcribe(self, audio, init_prompt="") -> Tuple[List[Segment], TranscriptionInfo]:
